@@ -7,102 +7,186 @@ class Pioche:
         conn = sqlite3.connect('city.db')
         cursor = conn.cursor()
         self.pioche = []
-        cursor.execute("SELECT name,how_many FROM users")
-
+        
+        cursor.execute("SELECT name, how_many FROM users")
         list_pioche = cursor.fetchall()
-        for i in range(len(list_pioche)):
-            for j in range(list_pioche[i][1]):
-                self.pioche.append(list_pioche[i][0])
+        
+        for name, count in list_pioche:
+            self.pioche.extend([name] * count)  # Ajoute la carte 'count' fois
+        
         conn.close()
-
         self.defausse = []
 
-  
     def pioche_aleatoire(self):
-        if len(self.pioche) == 0:
-            self.pioche = self.defausse
+        if not self.pioche:
+            self.pioche = self.defausse[:]
             self.defausse = []
+        
         item = random.choice(self.pioche)
         self.pioche.remove(item)
         return item
-    
+
+
 pioche = Pioche()
 
 
-class Player: #il faut raouter un check pour savoir si on peux le construire et si il y a des reduc 
+class Player:
     def __init__(self, name):
-        self.deck = []        # Liste de cartes possédées
-        self.city = {}        # Ville construite (pas encore utilisée)
-        self.point = 0        # Points du joueur
-        self.name = name      # Nom du joueur
-    
+        self.deck = []        
+        self.city = []        
+        self.point = 0        
+        self.name = name      
+
     def piocher(self, cmb):
-        # Pioche un nombre donné de cartes aléatoires
         for _ in range(cmb):
+            if len(self.deck) >= 12:
+                print("Limite de cartes atteinte.\n")
+                return
             item = pioche.pioche_aleatoire()
             self.deck.append(item)
 
     def build(self, carte):
-        # Essaie de construire une carte depuis le deck du joueur
+        if carte not in self.deck:
+            print(f"Tu n'as pas la carte {carte} !")
+            return
+
         conn = sqlite3.connect('city.db')
         cursor = conn.cursor()
 
-        if carte not in self.deck:
-            print(f"Tu n'as pas la carte {carte} !")
-            return None
-        
         try:
-            # Récupère le prix de la carte dans la base de données
-            cursor.execute("SELECT price FROM users WHERE name=?", (carte,))
+            cursor.execute(
+                "SELECT price, reduction_if, can_build_if FROM users WHERE name = ?",
+                (carte,)
+            )
             result = cursor.fetchone()
             if result is None:
-                print(f"La carte {carte} n'existe pas dans la base de données.")
+                print(f"La carte {carte} n'existe pas.")
                 return
-            price = result[0]
-        except Exception as e:
-            print(f"Erreur lors de l'accès à la base de données : {e}")
-            return
 
-        if price + 1 > len(self.deck):
-            manque = (price + 1) - len(self.deck)
-            print(f"Tu n'as pas assez de cartes. Il te manque {manque} carte(s).")
-            return
-        else:
-            print(f"Il faut utiliser {price} carte(s). Tape leurs numéros séparés par un espace.")
+            price, reduction_if, can_build_if = result
 
-            # Affiche toutes les cartes sauf celle à construire
-            for i in range(len(self.deck)):
-                if self.deck[i] != carte:
-                    print(f"{i}: {self.deck[i]}")
+            if can_build_if and can_build_if not in self.city:
+                print(f"Tu dois construire {can_build_if} avant de construire {carte} !")
+                return
 
-        # Récupère les index des cartes à utiliser pour construire
-        try:
-            carte_choisies = input("Entre les numéros : ").split(" ")
-            carte_choisies = list(map(int, carte_choisies))
-        except ValueError:
-            print("Entrée invalide. Veuillez entrer des nombres valides.")
-            return
+            if reduction_if in self.city and price > 0:
+                price -= 1
 
-        if len(carte_choisies) == price:
-            print(f"La carte {carte} a été construite. Les cartes utilisées : " +
-                  ", ".join(str(self.deck[i]) for i in carte_choisies))
+            # Vérifie si on a assez de cartes pour payer
+            if price + 1 > len(self.deck):
+                manque = (price + 1) - len(self.deck)
+                print(f"Tu n'as pas assez de cartes. Il te manque {manque} carte(s).")
+                return
 
-            # On trie les indices à supprimer à l'envers pour éviter les erreurs d'index
-            for i in sorted(carte_choisies, reverse=True):
+            print(f"Tu dois utiliser {price} carte(s) pour construire {carte}.")
+            for i, c in enumerate(self.deck):
+                if c != carte:
+                    print(f"{i}: {c}")
+
+            try:
+                choix = input("Entre les numéros : ").split()
+                indices = list(map(int, choix))
+            except ValueError:
+                print("Entrée invalide.")
+                return
+
+            if len(indices) != price:
+                print(f"{len(indices)} carte(s) sélectionnées, mais {price} requises.")
+                return
+
+            # Ajouter les cartes utilisées à la défausse
+            cartes_utilisées = [self.deck[i] for i in indices]
+            for i in sorted(indices, reverse=True):
+                pioche.defausse.append(self.deck[i])
                 del self.deck[i]
 
-            # Supprime une seule occurrence de la carte construite
+            # Enlève la carte construite du deck et ajoute à la ville
             self.deck.remove(carte)
-        else:
-            print(f"{len(carte_choisies)} carte(s) ont été sélectionnées, mais {price} sont requises.")
+            self.city.append(carte)
+            print(f"Carte {carte} construite avec succès.")
+            print(f"Cartes utilisées : {', '.join(cartes_utilisées)}")
 
+        except Exception as e:
+            print(f"Erreur : {e}")
+        finally:
+            conn.close()
 
+    def calc_score(self):
+        self.point = 0
+        try:
+            conn = sqlite3.connect('city.db')
+            cursor = conn.cursor()
+            for card in self.city:
+                cursor.execute("SELECT points, color FROM users WHERE name = ?", (card,))
+                result = cursor.fetchone()
+                if not result:
+                    continue
 
-coolocactus = Player("coolocactus")
-coolocactus.piocher(5)
-print(coolocactus.deck)
-coolocactus.build(coolocactus.deck[2])
-print(coolocactus.deck)
+                points, color = result
+                self.point += points
+
+                # Appliquer les effets spéciaux selon la couleur
+                if color == "green":
+                    for c in self.city:
+                        cursor.execute("SELECT special_green FROM users WHERE name = ?", (c,))
+                        bonus = cursor.fetchone()
+                        if bonus and bonus[0]:
+                            self.point += int(bonus[0])
+                elif color == "red":
+                    for c in self.city:
+                        cursor.execute("SELECT special_red FROM users WHERE name = ?", (c,))
+                        bonus = cursor.fetchone()
+                        if bonus and bonus[0]:
+                            self.point += int(bonus[0])
+                elif color == "blue":
+                    for c in self.city:
+                        cursor.execute("SELECT special_blue FROM users WHERE name = ?", (c,))
+                        bonus = cursor.fetchone()
+                        if bonus and bonus[0]:
+                            self.point += int(bonus[0])
+
+        except Exception as e:
+            print(f"Erreur dans le calcul des points : {e}")
+        finally:
+            conn.close()
+
+    def calc_money(self):
+        money = 0
+        try:
+            conn = sqlite3.connect('city.db')
+            cursor = conn.cursor()
+            for card in self.city:
+                cursor.execute("SELECT money, color FROM users WHERE name = ?", (card,))
+                result = cursor.fetchone()
+                if not result:
+                    continue
+
+                base_money, color = result
+                money += base_money
+
+                if color == "green":
+                    for c in self.city:
+                        cursor.execute("SELECT special_green FROM users WHERE name = ?", (c,))
+                        bonus = cursor.fetchone()
+                        if bonus and bonus[0]:
+                            money += int(bonus[0])
+                elif color == "red":
+                    for c in self.city:
+                        cursor.execute("SELECT special_red FROM users WHERE name = ?", (c,))
+                        bonus = cursor.fetchone()
+                        if bonus and bonus[0]:
+                            money += int(bonus[0])
+                elif color == "blue":
+                    for c in self.city:
+                        cursor.execute("SELECT special_blue FROM users WHERE name = ?", (c,))
+                        bonus = cursor.fetchone()
+                        if bonus and bonus[0]:
+                            money += int(bonus[0])
+        except Exception as e:
+            print(f"Erreur dans le calcul de l'argent : {e}")
+        finally:
+            conn.close()
+        return money
 
 
 
